@@ -23,6 +23,7 @@ int main(void) {
 
   for (;;) {
     printf("init: starting sh\n");
+    printf("[210110621] start sh through execve\n");
     pid = fork();
     if (pid < 0) {
       printf("init: fork failed\n");
