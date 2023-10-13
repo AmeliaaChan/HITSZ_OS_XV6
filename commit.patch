@@ -1,0 +1,223 @@
+diff --git a/Makefile b/Makefile
+index cac799d..65a91c4 100644
+--- a/Makefile
++++ b/Makefile
+@@ -154,7 +154,9 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
+-
++	$U/_sleep\
++	$U/_pingpong\
++	$U/_find\
+ 
+ ifeq ($(LAB),syscall)
+ UPROGS += \
+diff --git a/kernel/main.c b/kernel/main.c
+index 8a3dc2e..433b741 100644
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -9,8 +9,7 @@ volatile static int started = 0;
+ // start() jumps here in supervisor mode on all CPUs.
+ void main() {
+   if (cpuid() == 0) {
+-    // consoleinit();
+-    // printfinit();
++    printf("[210110621] enter main, init kernel\n");
+     printf("\n");
+     printf("xv6 kernel is booting\n");
+     printf("\n");
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 1607145..1efb44b 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -183,6 +183,7 @@ uchar initcode[] = {0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02, 0x97, 0x05,
+ 
+ // Set up first user process.
+ void userinit(void) {
++  printf("[210110621] enter userinit\n");
+   struct proc *p;
+ 
+   p = allocproc();
+@@ -197,6 +198,7 @@ void userinit(void) {
+   p->trapframe->epc = 0;      // user program counter
+   p->trapframe->sp = PGSIZE;  // user stack pointer
+ 
++  printf("[210110621] copy initcode to first user process\n");
+   safestrcpy(p->name, "initcode", sizeof(p->name));
+   p->cwd = namei("/");
+ 
+diff --git a/kernel/start.c b/kernel/start.c
+index f704fee..30da99a 100644
+--- a/kernel/start.c
++++ b/kernel/start.c
+@@ -52,6 +52,7 @@ void start() {
+     // init uart and printf
+     consoleinit();
+     printfinit();
++    printf("[210110621] in start, init driver, interrupts and change mode\n");
+   }
+ 
+   // switch to supervisor mode and jump to main().
+diff --git a/user/find.c b/user/find.c
+new file mode 100644
+index 0000000..c6a94fc
+--- /dev/null
++++ b/user/find.c
+@@ -0,0 +1,78 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++#include "kernel/fs.h"
++
++char *fmtname(char *path) {
++    static char buf[DIRSIZ + 1];
++    char *p;
++
++    // Find first character after last slash.
++    for (p = path + strlen(path); p >= path && *p != '/'; p--)
++        ;
++    p++;
++
++    // Return \-removed name.
++    //if (strlen(p) >= DIRSIZ) return p;
++    memmove(buf, p, strlen(p)+1);
++    //memset(buf + strlen(p), ' ', DIRSIZ - strlen(p));
++    return buf;
++}
++
++void find(char *path, char *filename){
++    char buf[512], *p;
++    int fd;
++    struct dirent de;
++    struct stat st;
++
++    if ((fd = open(path, 0)) < 0) {
++        fprintf(2, "find: cannot open %s\n", path);
++        return;
++    }
++
++    if (fstat(fd, &st) < 0) {
++        fprintf(2, "ls: cannot stat %s\n", path);
++        close(fd);
++        return;
++    }
++
++    switch (st.type){
++        case T_FILE:
++            if(strcmp(fmtname(path),filename) == 0){
++                printf("%s\n",path);
++            }
++            break;
++        case T_DIR:
++            if (strlen(path) + 1 + DIRSIZ + 1 > sizeof buf) {
++                printf("find: path too long\n");
++                break;
++            }
++            strcpy(buf, path);
++            p = buf + strlen(buf);
++            *p++ = '/';
++            while (read(fd, &de, sizeof(de)) == sizeof(de)) {
++                if (de.inum == 0 || strcmp(de.name,".") == 0 || strcmp(de.name,"..") == 0) 
++                    continue;
++                memmove(p, de.name, DIRSIZ);
++                p[DIRSIZ] = 0;
++                if (stat(buf, &st) < 0) {
++                    printf("find: cannot stat %s\n", buf);
++                    continue;
++                }
++                find(buf,filename);
++            }
++            break;
++    }
++    close(fd);
++}
++
++int main(int argc, char *argv[])
++{
++    if(argc != 3){
++        printf("Find needs a path and a filename!\n");
++        exit(-1);
++    }
++    find(argv[1], argv[2]);
++    exit(0);
++}
++
+diff --git a/user/init.c b/user/init.c
+index 9ca8790..5c8ec53 100644
+--- a/user/init.c
++++ b/user/init.c
+@@ -23,6 +23,7 @@ int main(void) {
+ 
+   for (;;) {
+     printf("init: starting sh\n");
++    printf("[210110621] start sh through execve\n");
+     pid = fork();
+     if (pid < 0) {
+       printf("init: fork failed\n");
+diff --git a/user/pingpong.c b/user/pingpong.c
+new file mode 100644
+index 0000000..56150a8
+--- /dev/null
++++ b/user/pingpong.c
+@@ -0,0 +1,39 @@
++#include "kernel/types.h"
++#include "user.h"
++
++int main(int argc, char const *argv[])
++{
++	int p1[2], p2[2];
++    pipe(p1);
++    pipe(p2);
++    char buf1[4] = "ping";
++    char buf2[4] = "pong";
++    char buf[4];
++    int pid_child,pid_parent;
++    if(fork() == 0){
++        /*子进程*/
++        pid_child = getpid();   
++        close(p1[1]);    //关闭p1写端          
++        read(p1[0],buf,4);   //读取管道p1内信息
++        printf("%d: received %s\n",pid_child,buf);
++        close(p1[0]);    //读取完毕，关闭p1读端
++        
++        close(p2[0]);    //关闭p2读端
++        write(p2[1],buf2,4);
++        close(p2[1]);    //写入完毕，关闭p2写端
++        exit(0);
++    }
++    else{
++        /*父进程*/
++        pid_parent = getpid();
++        close(p1[0]);    //关闭p1读端
++        write(p1[1],buf1,4);
++        close(p1[1]);    //写入完毕，关闭p1写端
++
++        close(p2[1]);   //关闭p1写端
++        read(p2[0],buf,4);   //读取管道p2内信息
++        printf("%d: received %s\n",pid_parent,buf);
++        close(p2[0]);    //读入完毕，关闭p2读端
++    }
++    exit(0);
++}
+\ No newline at end of file
+diff --git a/user/sleep.c b/user/sleep.c
+new file mode 100644
+index 0000000..614675d
+--- /dev/null
++++ b/user/sleep.c
+@@ -0,0 +1,13 @@
++#include "kernel/types.h"
++#include "user.h"
++
++int main(int argc,char* argv[]){
++    if(argc !=2){
++        printf("Sleep needs one argument!\n");
++        exit(-1);
++    }
++    int ticks = atoi(argv[1]);
++    sleep(ticks);
++    printf("(nothing happens for a little while)\n");
++    exit(0);
++}
+\ No newline at end of file

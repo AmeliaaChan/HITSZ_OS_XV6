@@ -30,7 +30,7 @@ int main(int argc, char const *argv[])
         write(p1[1],buf1,4);
         close(p1[1]);    //写入完毕，关闭p1写端
 
-        close(p2[1]);   //关闭p1写端
+        close(p2[1]);   //关闭p2写端
         read(p2[0],buf,4);   //读取管道p2内信息
         printf("%d: received %s\n",pid_parent,buf);
         close(p2[0]);    //读入完毕，关闭p2读端
