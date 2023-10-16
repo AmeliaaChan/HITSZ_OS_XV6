@@ -296,6 +296,8 @@ void reparent(struct proc *p) {
 // until its parent calls wait().
 void exit(int status) {
   struct proc *p = myproc();
+  static char *states[] = {
+      [UNUSED] "unused", [SLEEPING] "sleep ", [RUNNABLE] "runble", [RUNNING] "run   ", [ZOMBIE] "zombie"};
 
   if (p == initproc) panic("init exiting");
 
@@ -307,12 +309,12 @@ void exit(int status) {
       p->ofile[fd] = 0;
     }
   }
-
+  
   begin_op();
   iput(p->cwd);
   end_op();
   p->cwd = 0;
-
+  
   // we might re-parent a child to init. we can't be precise about
   // waking up init, since we can't acquire its lock once we've
   // acquired any other proc lock. so wake up init whether that's
@@ -321,7 +323,7 @@ void exit(int status) {
   acquire(&initproc->lock);
   wakeup1(initproc);
   release(&initproc->lock);
-
+  
   // grab a copy of p->parent, to ensure that we unlock the same
   // parent we locked. in case our parent gives us away to init while
   // we're waiting for the parent lock. we may then race with an
@@ -332,23 +334,32 @@ void exit(int status) {
   struct proc *original_parent = p->parent;
   release(&p->lock);
 
+  
   // we need the parent's lock in order to wake it up from wait().
   // the parent-then-child rule says we have to lock it first.
   acquire(&original_parent->lock);
 
   acquire(&p->lock);
-
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid,original_parent->pid, original_parent->name,states[original_parent->state]);
+  struct proc *pp;
+  int i = 0;
+  for (pp = proc; pp < &proc[NPROC]; pp++) {
+    if (pp->parent == p) {
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, i, pp->pid, pp->name, states[pp->state]);
+      i ++;
+    }
+  }
   // Give any children to init.
   reparent(p);
-
+  
   // Parent might be sleeping in wait().
   wakeup1(original_parent);
-
+  
   p->xstate = status;
   p->state = ZOMBIE;
-
+  
   release(&original_parent->lock);
-
+  
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
@@ -356,7 +367,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr,int flags) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -399,9 +410,14 @@ int wait(uint64 addr) {
       release(&p->lock);
       return -1;
     }
-
+    //非阻塞状态
+    if(flags){
+      release(&p->lock);
+      return -1;
+    }
     // Wait for a child to exit.
     sleep(p, &p->lock);  // DOC: wait-sleep
+
   }
 }
 
@@ -422,6 +438,7 @@ void scheduler(void) {
     intr_on();
 
     int found = 0;
+
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
@@ -473,6 +490,7 @@ void yield(void) {
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  printf("start to yield, user pc %p\n", p->trapframe->epc);
   sched();
   release(&p->lock);
 }
@@ -619,3 +637,4 @@ void procdump(void) {
     printf("\n");
   }
 }
+
