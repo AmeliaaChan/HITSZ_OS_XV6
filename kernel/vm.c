@@ -316,6 +316,10 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
 int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
+  w_sstatus(r_sstatus() | SSTATUS_SUM);
+  int res = copyin_new(pagetable,dst,srcva,len);
+  w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  return res;
   uint64 n, va0, pa0;
 
   while (len > 0) {
@@ -338,6 +342,10 @@ int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
 int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max) {
+  w_sstatus(r_sstatus() | SSTATUS_SUM);
+  int res = copyinstr_new(pagetable,dst,srcva,max);
+  w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  return res;
   uint64 n, va0, pa0;
   int got_null = 0;
 
@@ -379,3 +387,83 @@ int test_pagetable() {
   printf("test_pagetable: %d\n", satp != gsatp);
   return satp != gsatp;
 }
+
+void print_helper(pagetable_t pagetable,int level,uint64 va){
+  for(int i = 0;i < 512;i ++){
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V){
+      char flags[5] = "----";
+      uint flag = PTE_FLAGS(pte);
+      if(flag & PTE_R)  flags[0] = 'r';
+      if(flag & PTE_W)  flags[1] = 'w';
+      if(flag & PTE_X)  flags[2] = 'x';
+      if(flag & PTE_U)  flags[3] = 'u';
+      uint64 pa = PTE2PA(pte);
+      if(level == 2){
+        printf("||idx: %d: pa: %p, flags: %s\n",i,pa,flags);
+        print_helper((pagetable_t)pa,level-1,i << 30);
+      }else if(level){
+        printf("||   ||idx: %d: pa: %p, flags: %s\n",i,pa,flags);
+        print_helper((pagetable_t)pa,level-1,va | (i << 21));
+      }else{
+        printf("||   ||   ||idx: %d: va: %p -> pa: %p, flags: %s\n",i,(va | (i << 12) | (pa & 0xFFF))&0x3FFFFFFFFF,pa,flags);
+      }
+    }
+  }
+}
+
+//print pagetable
+void vmprint(pagetable_t pagetable){
+  printf("page table %p\n",pagetable);
+  print_helper(pagetable,2,0);
+}
+
+// add a mapping to the kernel page table.
+// only used when booting.
+// does not flush TLB or enable paging.
+void k_kvmmap(pagetable_t pagetable,uint64 va, uint64 pa, uint64 sz, int perm) {
+  if (mappages(pagetable, va, sz, pa, perm) != 0) panic("kvmmap");
+}
+
+/*
+ * create a new direct-map page table for the kernel and return.
+ */
+pagetable_t k_kvminit() {
+  pagetable_t k_pagetable = (pagetable_t)kalloc();
+  memset(k_pagetable, 0, PGSIZE);
+
+  // uart registers
+  k_kvmmap(k_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  k_kvmmap(k_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // // CLINT
+  // kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  k_kvmmap(k_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  k_kvmmap(k_pagetable, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  k_kvmmap(k_pagetable, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  k_kvmmap(k_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return k_pagetable;
+}
+
+void sync_pagetable(pagetable_t k_pagetable, pagetable_t u_pagetable, uint64 start, uint64 end){
+  pte_t *pte;
+  pte_t *k_pte;
+  for (int i = start; i < end; i+=PGSIZE) {
+    pte = walk(u_pagetable, i, 0);
+    k_pte = walk(k_pagetable, i, 1);
+    *k_pte = (*pte) & (~PTE_U);
+  }
+}
+

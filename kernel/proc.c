@@ -37,6 +37,7 @@ void procinit(void) {
     uint64 va = KSTACK((int)(p - proc));
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
     p->kstack = va;
+    p->kstack_pa = (uint64)pa;
   }
   kvminithart();
 }
@@ -111,6 +112,9 @@ found:
     return 0;
   }
 
+  p->k_pagetable = k_kvminit();
+  k_kvmmap(p->k_pagetable,p->kstack,p->kstack_pa,PGSIZE,PTE_R|PTE_W);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -127,7 +131,9 @@ static void freeproc(struct proc *p) {
   if (p->trapframe) kfree((void *)p->trapframe);
   p->trapframe = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
+  if(p->k_pagetable) proc_freepagetable_new(p->k_pagetable);
   p->pagetable = 0;
+  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -174,6 +180,20 @@ void proc_freepagetable(pagetable_t pagetable, uint64 sz) {
   uvmfree(pagetable, sz);
 }
 
+void proc_freepagetable_new(pagetable_t pagetable) {
+  // there are 2^9 = 512 PTEs in a page table.
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      proc_freepagetable_new((pagetable_t)child);
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void *)pagetable);
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02, 0x97, 0x05, 0x00, 0x00, 0x93,
@@ -192,6 +212,8 @@ void userinit(void) {
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+
+  sync_pagetable(p->k_pagetable, p->pagetable, 0, 1);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -216,6 +238,7 @@ int growproc(int n) {
     if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    sync_pagetable(p->k_pagetable, p->pagetable, sz-n, sz);
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
@@ -255,6 +278,8 @@ int fork(void) {
   for (i = 0; i < NOFILE; i++)
     if (p->ofile[i]) np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  sync_pagetable(np->k_pagetable, np->pagetable, 0, np->sz);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -430,8 +455,10 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
-
+        
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
@@ -440,6 +467,7 @@ void scheduler(void) {
       }
       release(&p->lock);
     }
+    if(found == 0)  kvminithart();
 #if !defined(LAB_FS)
     if (found == 0) {
       intr_on();
