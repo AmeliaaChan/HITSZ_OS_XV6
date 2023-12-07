@@ -241,6 +241,7 @@ int growproc(int n) {
     sync_pagetable(p->k_pagetable, p->pagetable, sz-n, sz);
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uvmdealloc(p->k_pagetable, sz, sz - n);
   }
   p->sz = sz;
   return 0;
@@ -458,7 +459,7 @@ void scheduler(void) {
         w_satp(MAKE_SATP(p->k_pagetable));
         sfence_vma();
         swtch(&c->context, &p->context);
-        
+        // kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
