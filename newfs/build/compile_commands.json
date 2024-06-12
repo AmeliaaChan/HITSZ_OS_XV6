@@ -1,0 +1,12 @@
+[
+{
+  "directory": "/home/students/210110621/Scarches/user-land-filesystem/fs/newfs/build",
+  "command": "/usr/bin/gcc  -I/home/students/210110621/Scarches/user-land-filesystem/fs/newfs/./include  -D_FILE_OFFSET_BITS=64 -no-pie -g -Wall --pedantic -g -o CMakeFiles/nfs.dir/src/nfs.c.o -c /home/students/210110621/Scarches/user-land-filesystem/fs/newfs/src/nfs.c",
+  "file": "/home/students/210110621/Scarches/user-land-filesystem/fs/newfs/src/nfs.c"
+},
+{
+  "directory": "/home/students/210110621/Scarches/user-land-filesystem/fs/newfs/build",
+  "command": "/usr/bin/gcc  -I/home/students/210110621/Scarches/user-land-filesystem/fs/newfs/./include  -D_FILE_OFFSET_BITS=64 -no-pie -g -Wall --pedantic -g -o CMakeFiles/nfs.dir/src/nfs_utils.c.o -c /home/students/210110621/Scarches/user-land-filesystem/fs/newfs/src/nfs_utils.c",
+  "file": "/home/students/210110621/Scarches/user-land-filesystem/fs/newfs/src/nfs_utils.c"
+}
+]
